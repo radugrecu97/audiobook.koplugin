@@ -11,7 +11,7 @@
 ![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)
 ![Platform](https://img.shields.io/badge/platform-Kobo%20%7C%20Kindle%20%7C%20PocketBook%20%7C%20Linux-blue)
 ![Android](https://img.shields.io/badge/Android-supported-brightgreen)
-![TTS](https://img.shields.io/badge/TTS-Piper%20%7C%20espeak--ng%20%7C%20Android-green)
+![TTS](https://img.shields.io/badge/TTS-Piper%20%7C%20Supertonic%20%7C%20espeak--ng%20%7C%20Android-green)
 
 </h3>
 
@@ -104,7 +104,37 @@ The bundled espeak-ng and Piper binaries are for Linux-based e-readers and will 
 
 Piper sounds much more natural than espeak-ng. It runs fully offline on Kobo's ARM processor (~40 MB for engine + voice model). The [pre-built release](https://github.com/stradichenko/audiobook.koplugin/releases/latest) already includes Piper and a default voice (`en_US-danny-low`). For faster load times on Kobo, `low` quality voices like this one are recommended (see [Choosing a voice](#choosing-a-voice)). To build a bundle yourself, see [Building from source](#building-from-source).
 
-Switch between espeak-ng and Piper any time from **Tools > Audiobook Read-Along > Voice settings**.
+Switch between espeak-ng, Piper, and Supertonic any time from **Tools > Audiobook Read-Along > Voice settings**.
+
+## Optional: Supertonic ONNX TTS (Sherpa-ONNX)
+
+Supertonic is another neural backend that runs through ONNX Runtime via `sherpa-onnx-offline-tts`.
+
+To use it, place the Supertonic model files in:
+
+```text
+audiobook.koplugin/supertonic/
+```
+
+Required files:
+
+- `duration_predictor.int8.onnx` (or `duration_predictor.onnx`)
+- `text_encoder.int8.onnx` (or `text_encoder.onnx`)
+- `vector_estimator.int8.onnx` (or `vector_estimator.onnx`)
+- `vocoder.int8.onnx` (or `vocoder.onnx`)
+- `tts.json`
+- `unicode_indexer.bin`
+- `voice.bin`
+
+Then select **Supertonic (ONNX Runtime, neural)** from:
+
+**Tools > Audiobook Read-Along > Voice settings > TTS engine**
+
+On single-core Kobo devices (e.g. Clara BW), start with:
+
+- `Supertonic flow steps`: `4` or `6` (faster)
+- `Speech rate`: `1.0x`
+- `Supertonic language`: match book language (default `en`)
 
 ### Choosing a voice
 
@@ -191,7 +221,7 @@ All settings are under **Tools > Audiobook Read-Along**:
   - **Bluetooth** - pair, connect, disconnect, scan
   - **Headset media buttons** - use play/pause/next/prev on a Bluetooth headset or speaker to control TTS playback
   - **Disconnect alert** - notify if all BT audio devices disconnect during playback
-- **Voice settings** - TTS engine, voice, speech rate, pitch, volume, sentence/paragraph pauses (espeak-ng), sentence/paragraph gaps (Piper), word gap, clause pause. Includes **Quick start with espeak** (Piper-only) which plays the first sentence with espeak-ng while Piper loads, avoiding the ~3s cold start silence.
+- **Voice settings** - TTS engine, voice, speech rate, pitch, volume, sentence/paragraph pauses (espeak-ng), sentence/paragraph gaps (Piper), Supertonic model/language/speaker/flow-steps, word gap, clause pause. Includes **Quick start with espeak** (Piper-only) which plays the first sentence with espeak-ng while Piper loads, avoiding the ~3s cold start silence.
 - **General settings**
   - **Audio output (PocketBook)** - ALSA device selection for PocketBook firmware quirks
   - **Keep playing when lid is closed** - prevents device suspend so audio continues with the case closed
@@ -362,10 +392,10 @@ Connect your device via USB and copy the file. On Kobo the `.adds` folder is hid
 
 | Diagnostic question | Bug report | Crash log |
 |---------------------|:----------:|:---------:|
-| Device model, hardware specs, KOReader version, plugin version, TTS engines installed (espeak, Piper, Android), plugin settings (rate, highlight, voice) | yes | no |
+| Device model, hardware specs, KOReader version, plugin version, TTS engines installed (espeak, Piper, Supertonic, Android), plugin settings (rate, highlight, voice) | yes | no |
 | Full ALSA configuration (asound.conf, sound cards, PCM devices), audio process list (alsaloop, bluealsa PIDs), ALSA mixer state, wav-play smoke test result | yes | no |
 | Bluetooth pairing and connection state, HCI devices, adapter info | yes | no |
-| Lua errors and stack traces, TTS process spawning and fallback events, sentence progression and page turns, timing of operations (delays, freezes), Piper server startup and delivery, device freeze or resource exhaustion | no | yes |
+| Lua errors and stack traces, TTS process spawning and fallback events, sentence progression and page turns, timing of operations (delays, freezes), Piper/Supertonic startup and delivery, device freeze or resource exhaustion | no | yes |
 
 ## Device benchmark
 

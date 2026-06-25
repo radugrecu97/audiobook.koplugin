@@ -190,6 +190,10 @@ function Audiobook:_initSubmodules()
                 self.tts_engine:setPiperModel(piper_model)
             end
             self.tts_engine:setPiperSpeaker(self:getSetting("piper_speaker", 0))
+            self.tts_engine:setSupertonicModelDir(self:getSetting("supertonic_model_dir", nil))
+            self.tts_engine:setSupertonicLang(self:getSetting("supertonic_lang", "en"))
+            self.tts_engine:setSupertonicSid(self:getSetting("supertonic_sid", 0))
+            self.tts_engine:setSupertonicNumSteps(self:getSetting("supertonic_num_steps", 8))
             self.tts_engine._gap_test_mode = self:getSetting("gap_test_mode", false)
             self.highlight_manager = HighlightManager:new{
                 plugin = self,
@@ -437,6 +441,9 @@ function Audiobook:addToMainMenu(menu_items)
                     if self.tts_engine.backend == self.tts_engine.BACKENDS.PIPER then
                         local model_label = self:getSetting("piper_model_label", "default")
                         return T(_("Voice settings (Piper - %1)"), model_label)
+                    elseif self.tts_engine.backend == self.tts_engine.BACKENDS.SUPERTONIC then
+                        local model_label = self:getSetting("supertonic_model_label", _("auto"))
+                        return T(_("Voice settings (Supertonic - %1)"), model_label)
                     end
                     local voice_label = self:getSetting("tts_voice_label", "English (GB)")
                     local variant_label = self:getSetting("tts_variant_label", "")
@@ -696,6 +703,7 @@ function Audiobook:addToMainMenu(menu_items)
                         local backend_labels = {
                             espeak = "espeak-ng",
                             piper = "Piper",
+                            supertonic = "Supertonic",
                             pico = "Pico",
                             flite = "Flite",
                             festival = "Festival",
@@ -830,15 +838,22 @@ function Audiobook:startReadAlong(text, start_pos)
         end
     end)
 
-    -- v0.1.9.6: Pre-synthesis warning when Piper (or another WAV-producing
+    -- v0.1.9.6: Pre-synthesis warning when neural WAV-producing backends
     -- backend) is selected on a stripped-GStreamer Kindle.  The fallback to
     -- native Ivona TTS happens automatically, but users should know *before*
     -- synthesis starts so they aren't surprised by the voice change.
     if self.tts_engine._kindle_wav_playback_limited
-        and self.tts_engine.backend == self.tts_engine.BACKENDS.PIPER then
+        and (self.tts_engine.backend == self.tts_engine.BACKENDS.PIPER
+            or self.tts_engine.backend == self.tts_engine.BACKENDS.SUPERTONIC) then
+        local backend_label = "Neural"
+        if self.tts_engine.backend == self.tts_engine.BACKENDS.PIPER then
+            backend_label = "Piper"
+        elseif self.tts_engine.backend == self.tts_engine.BACKENDS.SUPERTONIC then
+            backend_label = "Supertonic"
+        end
         UIManager:show(InfoMessage:new{
             text = _(
-                "Piper TTS is selected, but this Kindle model cannot play WAV files.\n\n"
+                backend_label .. " TTS is selected, but this Kindle model cannot play WAV files.\n\n"
                 .. "Audio will use the built-in Kindle voice instead. "
                 .. "Word highlighting may be slightly less precise."
             ),
@@ -1636,6 +1651,18 @@ function Audiobook:_killOrphanProcessesFromPreviousSession()
         end
     end
 
+    -- 2b. Kill orphan sherpa-onnx-offline-tts processes (Supertonic backend)
+    h = io.popen("pgrep -fc 'sherpa-onnx-offline-tts' 2>/dev/null")
+    if h then
+        local count = tonumber(h:read("*a"))
+        h:close()
+        if count and count > 0 then
+            os.execute("pkill -9 -f 'sherpa-onnx-offline-tts' 2>/dev/null")
+            dominated = true
+            logger.warn("Audiobook: Startup cleanup — killed orphan sherpa-onnx-offline-tts")
+        end
+    end
+
     -- 3. Kill orphan feeder/server shell scripts by PID file
     local pid_files = {
         "/tmp/audiobook_ctrl/gst_pid",    -- persistent pipeline gst PID
@@ -1668,6 +1695,7 @@ function Audiobook:_killOrphanProcessesFromPreviousSession()
     -- 6. Clean up stale temp files
     os.execute("rm -f /tmp/audiobook_fifo /tmp/audiobook_pipeline.sh /tmp/audiobook_ctrl/gst_pid /tmp/audiobook_ctrl/stop /tmp/audiobook_ctrl/play /tmp/audiobook_ctrl/done 2>/dev/null")
     os.execute("rm -f /tmp/piper_server_*.pid /tmp/piper_server_*.piper_pid /tmp/piper_server_*.sh /tmp/piper_server_*.log 2>/dev/null")
+    os.execute("rm -f /tmp/.supertonic_last.log 2>/dev/null")
 
     if dominated then
         -- Give kernel time to release sockets after SIGKILL

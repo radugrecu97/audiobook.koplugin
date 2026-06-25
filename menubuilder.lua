@@ -30,6 +30,7 @@ function MenuBuilder.buildVoiceSettingsMenu(plugin)
             local labels = {
                 espeak = _("espeak-ng"),
                 piper = _("Piper (neural)"),
+                supertonic = _("Supertonic (ONNX Runtime)"),
                 pico = _("Pico TTS"),
                 flite = _("Flite"),
                 festival = _("Festival"),
@@ -245,6 +246,37 @@ function MenuBuilder.buildVoiceSettingsMenu(plugin)
                 end
             end,
         })
+    elseif plugin.tts_engine.backend == plugin.tts_engine.BACKENDS.SUPERTONIC then
+        table.insert(menu, {
+            text_func = function()
+                local model = plugin:getSetting("supertonic_model_label", _("auto"))
+                return T(_("Supertonic model: %1"), model)
+            end,
+            sub_item_table_func = function()
+                return MenuBuilder.buildSupertonicPackMenu(plugin)
+            end,
+        })
+
+        table.insert(menu, {
+            text_func = function()
+                return T(_("Supertonic language: %1"), plugin:getSetting("supertonic_lang", "en"))
+            end,
+            sub_item_table = MenuBuilder.buildSupertonicLangMenu(plugin),
+        })
+
+        table.insert(menu, {
+            text_func = function()
+                return T(_("Supertonic speaker ID: %1"), tostring(plugin:getSetting("supertonic_sid", 0)))
+            end,
+            sub_item_table = MenuBuilder.buildSupertonicSidMenu(plugin),
+        })
+
+        table.insert(menu, {
+            text_func = function()
+                return T(_("Supertonic flow steps: %1"), tostring(plugin:getSetting("supertonic_num_steps", 8)))
+            end,
+            sub_item_table = MenuBuilder.buildSupertonicNumStepsMenu(plugin),
+        })
     else
         table.insert(menu, {
             text_func = function()
@@ -442,6 +474,119 @@ function MenuBuilder.buildPiperParagraphGapMenu(plugin)
             end,
         })
     end
+    return menu
+end
+
+function MenuBuilder.buildSupertonicLangMenu(plugin)
+    local langs = {
+        "en", "ko", "ja", "ar", "bg", "cs", "da", "de", "el", "es",
+        "et", "fi", "fr", "hi", "hr", "hu", "id", "it", "lt", "lv",
+        "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "tr", "uk", "vi",
+    }
+    local menu = {}
+    for _, lang in ipairs(langs) do
+        table.insert(menu, {
+            text = lang,
+            checked_func = function()
+                return plugin:getSetting("supertonic_lang", "en") == lang
+            end,
+            callback = function()
+                plugin:setSetting("supertonic_lang", lang)
+                plugin.tts_engine:setSupertonicLang(lang)
+            end,
+        })
+    end
+    return menu
+end
+
+function MenuBuilder.buildSupertonicSidMenu(plugin)
+    local menu = {}
+    for sid = 0, 15 do
+        local sid_value = sid
+        table.insert(menu, {
+            text = tostring(sid_value),
+            checked_func = function()
+                return tonumber(plugin:getSetting("supertonic_sid", 0)) == sid_value
+            end,
+            callback = function()
+                plugin:setSetting("supertonic_sid", sid_value)
+                plugin.tts_engine:setSupertonicSid(sid_value)
+            end,
+        })
+    end
+    return menu
+end
+
+function MenuBuilder.buildSupertonicNumStepsMenu(plugin)
+    local values = {4, 6, 8, 10, 12}
+    local menu = {}
+    for _, steps in ipairs(values) do
+        local label = tostring(steps)
+        if steps == 8 then
+            label = label .. _(" (default)")
+        elseif steps == 4 then
+            label = label .. _(" (faster)")
+        elseif steps == 12 then
+            label = label .. _(" (higher quality)")
+        end
+        table.insert(menu, {
+            text = label,
+            checked_func = function()
+                return tonumber(plugin:getSetting("supertonic_num_steps", 8)) == steps
+            end,
+            callback = function()
+                plugin:setSetting("supertonic_num_steps", steps)
+                plugin.tts_engine:setSupertonicNumSteps(steps)
+            end,
+        })
+    end
+    return menu
+end
+
+function MenuBuilder.buildSupertonicPackMenu(plugin)
+    local menu = {}
+
+    table.insert(menu, {
+        text = _("Auto-detect model pack"),
+        checked_func = function()
+            return plugin:getSetting("supertonic_model_dir", nil) == nil
+        end,
+        callback = function()
+            plugin:setSetting("supertonic_model_dir", nil)
+            plugin:setSetting("supertonic_model_label", _("auto"))
+            plugin.tts_engine:setSupertonicModelDir(nil)
+        end,
+    })
+
+    local packs = plugin.tts_engine:listSupertonicPacks()
+    if #packs == 0 then
+        table.insert(menu, {
+            text = _("No Supertonic model pack found"),
+            enabled = false,
+        })
+        table.insert(menu, {
+            text = _("Place model files in plugins/audiobook.koplugin/supertonic/"),
+            enabled = false,
+        })
+        return menu
+    end
+
+    for _, pack in ipairs(packs) do
+        local label = pack.name
+        table.insert(menu, {
+            text = label,
+            checked_func = function()
+                return plugin:getSetting("supertonic_model_dir", nil) == pack.path
+                    or plugin.tts_engine.supertonic_model_dir == pack.path
+            end,
+            callback = function()
+                plugin:setSetting("supertonic_model_dir", pack.path)
+                plugin:setSetting("supertonic_model_label", label)
+                plugin.tts_engine:setSupertonicModelDir(pack.path)
+            end,
+        })
+    end
+
     return menu
 end
 
@@ -702,6 +847,14 @@ function MenuBuilder.buildEngineSelectMenu(plugin)
         table.insert(available, {
             id = engine.BACKENDS.PIPER,
             label = _("Piper (neural, natural-sounding)"),
+        })
+    end
+
+    -- Supertonic: available if bundled Sherpa binary or on PATH
+    if engine.supertonic_cmd or Utils.commandExists("sherpa-onnx-offline-tts") then
+        table.insert(available, {
+            id = engine.BACKENDS.SUPERTONIC,
+            label = _("Supertonic (ONNX Runtime, neural)"),
         })
     end
 

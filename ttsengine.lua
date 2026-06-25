@@ -58,6 +58,7 @@ local TTSEngine = {
         FESTIVAL = "festival",
         ANDROID = "android",
         PIPER = "piper",
+        SUPERTONIC = "supertonic",
         KINDLE_NATIVE = "kindle-native",
     },
     -- Default settings
@@ -89,6 +90,11 @@ function TTSEngine:new(o)
     -- Piper TTS state
     o.piper_model = o.piper_model or nil  -- path or name of .onnx voice model
     o.piper_speaker = o.piper_speaker or 0  -- speaker id for multi-speaker models
+    -- Supertonic TTS (Sherpa-ONNX) state
+    o.supertonic_model_dir = o.supertonic_model_dir or nil
+    o.supertonic_sid = o.supertonic_sid or 0
+    o.supertonic_lang = o.supertonic_lang or "en"
+    o.supertonic_num_steps = o.supertonic_num_steps or 8
     -- Prefetch state: holds pre-synthesized audio for the next sentence
     o._prefetch_file = nil
     o._prefetch_timing = nil
@@ -232,6 +238,18 @@ function TTSEngine:detectBackend()
         else
             logger.warn("TTSEngine: bundled Piper not found at", bundled_piper_bin)
         end
+        -- Check for bundled Supertonic TTS (Sherpa-ONNX offline TTS)
+        local supertonic_dir = plugin_dir .. "/supertonic"
+        local bundled_supertonic_bin = supertonic_dir .. "/sherpa-onnx-offline-tts"
+        local found_supertonic = false
+        if ensureBinary(bundled_supertonic_bin) then
+            found_supertonic = true
+            self.supertonic_cmd = bundled_supertonic_bin
+            self.supertonic_model_dir = supertonic_dir
+            logger.dbg("TTSEngine: Found bundled Supertonic TTS at", bundled_supertonic_bin)
+        else
+            logger.warn("TTSEngine: bundled Supertonic not found at", bundled_supertonic_bin)
+        end
         -- Check for bundled wav-play (ALSA player for devices without aplay)
         local wav_play_bin = plugin_dir .. "/wav-play/wav-play"
         if ensureBinary(wav_play_bin) then
@@ -239,13 +257,18 @@ function TTSEngine:detectBackend()
             self._wav_play_lib = plugin_dir .. "/wav-play/lib"
             logger.dbg("TTSEngine: Found bundled wav-play at", wav_play_bin)
         end
-        -- Pick default backend: espeak-ng first (lighter), then Piper
+        -- Pick default backend: espeak-ng first (lighter), then Piper,
+        -- then Supertonic (ONNX Runtime)
         if found_espeak then
             self.backend = self.BACKENDS.ESPEAK
             return
         elseif found_piper then
             self.backend = self.BACKENDS.PIPER
             self.backend_cmd = bundled_piper_bin
+            return
+        elseif found_supertonic then
+            self.backend = self.BACKENDS.SUPERTONIC
+            self.backend_cmd = bundled_supertonic_bin
             return
         end
     end
@@ -254,6 +277,7 @@ function TTSEngine:detectBackend()
         {name = self.BACKENDS.ESPEAK, cmd = "espeak-ng"},
         {name = self.BACKENDS.ESPEAK, cmd = "espeak"},
         {name = self.BACKENDS.PIPER, cmd = "piper"},
+        {name = self.BACKENDS.SUPERTONIC, cmd = "sherpa-onnx-offline-tts"},
         {name = self.BACKENDS.PICO, cmd = "pico2wave"},
         {name = self.BACKENDS.FLITE, cmd = "flite"},
         {name = self.BACKENDS.FESTIVAL, cmd = "festival"},
@@ -262,12 +286,15 @@ function TTSEngine:detectBackend()
         if self:commandExists(backend.cmd) then
             self.backend = backend.name
             self.backend_cmd = backend.cmd
+            if backend.name == self.BACKENDS.SUPERTONIC then
+                self.supertonic_cmd = backend.cmd
+            end
             logger.dbg("TTSEngine: Using", backend.name, "backend with command:", backend.cmd)
             return
         end
     end
     -- Log what we searched for
-    logger.warn("TTSEngine: No TTS backend found. Searched for: espeak-ng, espeak, pico2wave, flite, festival")
+    logger.warn("TTSEngine: No TTS backend found. Searched for: espeak-ng, espeak, piper, sherpa-onnx-offline-tts, pico2wave, flite, festival")
     -- On Android, try the native TextToSpeech API via JNI
     if is_android then
         local atts = AndroidTts:new{
@@ -316,8 +343,16 @@ function TTSEngine:detectBackend()
             lh:close()
             has_onnx = lr:match("%.onnx")
         end
+        if not has_onnx then
+            local sh = io.popen("ls '" .. plugin_dir .. "'/supertonic/*.onnx 2>/dev/null")
+            if sh then
+                local sr = sh:read("*a") or ""
+                sh:close()
+                has_onnx = sr:match("%.onnx")
+            end
+        end
         if has_onnx then
-            self.backend_error = _("No TTS engine found.\n\nVoice model files were found but the TTS binaries (espeak-ng, piper) are missing.\n\nPlease download the .zip file (audiobook-koplugin-v*.zip) from:\nhttps://github.com/stradichenko/audiobook.koplugin/releases/latest\n\nDo not download 'Source code' -- it does not include the TTS engines.\n\nIf you already installed from the .zip, please generate a bug report from the plugin menu and post it on GitHub.")
+            self.backend_error = _("No TTS engine found.\n\nVoice model files were found but the TTS binaries (espeak-ng, piper, sherpa-onnx-offline-tts) are missing.\n\nPlease download the .zip file (audiobook-koplugin-v*.zip) from:\nhttps://github.com/stradichenko/audiobook.koplugin/releases/latest\n\nDo not download 'Source code' -- it does not include the TTS engines.\n\nIf you already installed from the .zip, please generate a bug report from the plugin menu and post it on GitHub.")
         else
             self.backend_error = _("No TTS engine found. Please install espeak-ng.")
         end
@@ -331,6 +366,187 @@ Delegates to shared Utils module.
 --]]
 function TTSEngine:commandExists(cmd)
     return Utils.commandExists(cmd)
+end
+
+--[[--
+Check if a file or directory exists.
+@param path string
+@return boolean
+--]]
+function TTSEngine:_pathExists(path)
+    local f = io.open(path, "r")
+    if f then
+        f:close()
+        return true
+    end
+    local rc = os.execute("test -e '" .. path .. "' 2>/dev/null")
+    return rc == 0 or rc == true
+end
+
+--[[--
+Return the first existing file inside a directory from candidate basenames.
+@param dir string
+@param names table
+@return string|nil
+--]]
+function TTSEngine:_supertonicFindFile(dir, names)
+    if not dir or dir == "" then return nil end
+    for _, name in ipairs(names) do
+        local path = dir .. "/" .. name
+        local f = io.open(path, "r")
+        if f then
+            f:close()
+            return path
+        end
+    end
+    return nil
+end
+
+--[[--
+Resolve required Supertonic model assets in a directory.
+@param dir string
+@return table|nil
+--]]
+function TTSEngine:_resolveSupertonicFilesInDir(dir)
+    if not dir or dir == "" then return nil end
+
+    local files = {
+        duration_predictor = self:_supertonicFindFile(dir, {
+            "duration_predictor.int8.onnx",
+            "duration_predictor.onnx",
+        }),
+        text_encoder = self:_supertonicFindFile(dir, {
+            "text_encoder.int8.onnx",
+            "text_encoder.onnx",
+        }),
+        vector_estimator = self:_supertonicFindFile(dir, {
+            "vector_estimator.int8.onnx",
+            "vector_estimator.onnx",
+        }),
+        vocoder = self:_supertonicFindFile(dir, {
+            "vocoder.int8.onnx",
+            "vocoder.onnx",
+        }),
+        tts_json = self:_supertonicFindFile(dir, {
+            "tts.json",
+        }),
+        unicode_indexer = self:_supertonicFindFile(dir, {
+            "unicode_indexer.bin",
+        }),
+        voice_style = self:_supertonicFindFile(dir, {
+            "voice.bin",
+        }),
+    }
+
+    if not files.duration_predictor then return nil end
+    if not files.text_encoder then return nil end
+    if not files.vector_estimator then return nil end
+    if not files.vocoder then return nil end
+    if not files.tts_json then return nil end
+    if not files.unicode_indexer then return nil end
+    if not files.voice_style then return nil end
+
+    return files
+end
+
+--[[--
+Resolve a usable Supertonic model directory.
+@return string|nil
+--]]
+function TTSEngine:_resolveSupertonicModelDir()
+    local function isValid(dir)
+        return self:_resolveSupertonicFilesInDir(dir) ~= nil
+    end
+
+    if self._supertonic_resolved_dir and isValid(self._supertonic_resolved_dir) then
+        return self._supertonic_resolved_dir
+    end
+
+    local candidates = {}
+    if self.supertonic_model_dir then
+        table.insert(candidates, self.supertonic_model_dir)
+    end
+
+    local plugin_dir = Utils.normalizeDirPath(
+        self.plugin_dir or "/mnt/onboard/.adds/koreader/plugins/audiobook.koplugin")
+    table.insert(candidates, plugin_dir .. "/supertonic")
+    table.insert(candidates, plugin_dir .. "/supertonic/sherpa-onnx-supertonic-3-tts-int8-2026-05-11")
+    table.insert(candidates, plugin_dir .. "/sherpa-onnx-supertonic-3-tts-int8-2026-05-11")
+    -- Development fallback (repository checkout layout)
+    table.insert(candidates, plugin_dir .. "/test/sherpa-onnx-supertonic-3-tts-int8-2026-05-11")
+
+    local seen = {}
+    for _, dir in ipairs(candidates) do
+        if dir and dir ~= "" and not seen[dir] then
+            seen[dir] = true
+            if isValid(dir) then
+                self._supertonic_resolved_dir = dir
+                return dir
+            end
+        end
+    end
+
+    -- Final fallback: search for any directory containing tts.json + companion files.
+    local h = io.popen('find "' .. plugin_dir .. '" -maxdepth 5 -type f -name "tts.json" 2>/dev/null')
+    if h then
+        for line in h:lines() do
+            local tts_json = line:gsub("%s+$", "")
+            local dir = tts_json:match("(.+)/tts%.json$")
+            if dir and not seen[dir] then
+                seen[dir] = true
+                if isValid(dir) then
+                    h:close()
+                    self._supertonic_resolved_dir = dir
+                    return dir
+                end
+            end
+        end
+        h:close()
+    end
+
+    self._supertonic_resolved_dir = nil
+    return nil
+end
+
+--[[--
+List available Supertonic model packs.
+@return table  Array of {name=, path=}
+--]]
+function TTSEngine:listSupertonicVoices()
+    local plugin_dir = Utils.normalizeDirPath(
+        self.plugin_dir or "/mnt/onboard/.adds/koreader/plugins/audiobook.koplugin")
+    local packs = {}
+    local seen = {}
+
+    local function maybeAdd(dir)
+        if not dir or dir == "" or seen[dir] then return end
+        local files = self:_resolveSupertonicFilesInDir(dir)
+        if not files then return end
+        seen[dir] = true
+        table.insert(packs, {
+            name = dir:match("([^/]+)$") or dir,
+            path = dir,
+        })
+    end
+
+    maybeAdd(self.supertonic_model_dir)
+    maybeAdd(plugin_dir .. "/supertonic")
+    maybeAdd(plugin_dir .. "/supertonic/sherpa-onnx-supertonic-3-tts-int8-2026-05-11")
+    maybeAdd(plugin_dir .. "/sherpa-onnx-supertonic-3-tts-int8-2026-05-11")
+    maybeAdd(plugin_dir .. "/test/sherpa-onnx-supertonic-3-tts-int8-2026-05-11")
+
+    local h = io.popen('find "' .. plugin_dir .. '" -maxdepth 5 -type f -name "tts.json" 2>/dev/null')
+    if h then
+        for line in h:lines() do
+            local tts_json = line:gsub("%s+$", "")
+            local dir = tts_json:match("(.+)/tts%.json$")
+            maybeAdd(dir)
+        end
+        h:close()
+    end
+
+    table.sort(packs, function(a, b) return a.name < b.name end)
+    return packs
 end
 
 --- Detect whether this device is a PocketBook.
@@ -459,6 +675,75 @@ Set the extra pause at clause punctuation (commas, semicolons, etc.).
 function TTSEngine:setClausePause(pause)
     self.clause_pause = pause or 0
     logger.dbg("TTSEngine: Clause pause set to", self.clause_pause)
+end
+
+--[[--
+Build the shell command for Supertonic synthesis via sherpa-onnx-offline-tts.
+@param text string
+@param audio_file string
+@return string|nil
+--]]
+function TTSEngine:buildSupertonicCommand(text, audio_file)
+    local supertonic_bin = self.supertonic_cmd or self.backend_cmd or "sherpa-onnx-offline-tts"
+    local model_dir = self:_resolveSupertonicModelDir()
+    if not model_dir then
+        logger.err("TTSEngine: Supertonic model directory not found")
+        return nil
+    end
+
+    local files = self:_resolveSupertonicFilesInDir(model_dir)
+    if not files then
+        logger.err("TTSEngine: Supertonic model files missing in", model_dir)
+        return nil
+    end
+
+    self._supertonic_resolved_dir = model_dir
+
+    local sid = tonumber(self.supertonic_sid) or 0
+    sid = math.max(0, math.floor(sid))
+
+    local num_steps = tonumber(self.supertonic_num_steps) or 8
+    num_steps = math.max(1, math.min(20, math.floor(num_steps)))
+
+    local lang = (self.supertonic_lang or "en"):gsub("[^%a%-_]", "")
+    if lang == "" then lang = "en" end
+
+    local speed = math.max(0.5, math.min(2.0, self.rate or 1.0))
+
+    local exec_prefix = ""
+    local super_lib = model_dir .. "/lib"
+    if self:_pathExists(super_lib) then
+        exec_prefix = string.format('LD_LIBRARY_PATH="%s:/usr/lib:/lib" ', super_lib)
+    end
+
+    return string.format(
+        'nice -n 19 %s"%s" '
+            .. '--supertonic-duration-predictor="%s" '
+            .. '--supertonic-text-encoder="%s" '
+            .. '--supertonic-vector-estimator="%s" '
+            .. '--supertonic-vocoder="%s" '
+            .. '--supertonic-tts-json="%s" '
+            .. '--supertonic-unicode-indexer="%s" '
+            .. '--supertonic-voice-style="%s" '
+            .. '--num-threads=1 --tts-max-num-sentences=1 '
+            .. '--lang=%s --sid=%d --num-steps=%d --speed=%.2f '
+            .. '--output-filename="%s" "%s" 2>&1',
+        exec_prefix,
+        supertonic_bin,
+        files.duration_predictor,
+        files.text_encoder,
+        files.vector_estimator,
+        files.vocoder,
+        files.tts_json,
+        files.unicode_indexer,
+        files.voice_style,
+        lang,
+        sid,
+        num_steps,
+        speed,
+        audio_file,
+        self:escapeText(text)
+    )
 end
 --[[--
 Synthesize text and return timing metadata.
@@ -648,6 +933,8 @@ function TTSEngine:synthesizeCommand(text, callback)
         local text_file
         cmd, text_file = self._piper:buildCommand(text, audio_file)
         self._piper_text_file = text_file
+    elseif self.backend == self.BACKENDS.SUPERTONIC then
+        cmd = self:buildSupertonicCommand(text, audio_file)
     elseif self.backend == self.BACKENDS.PICO then
         cmd = string.format(
             'pico2wave -l en-US -w "%s" "%s" 2>&1',
@@ -679,19 +966,21 @@ function TTSEngine:synthesizeCommand(text, callback)
         return false
     end
     logger.dbg("TTSEngine: Running:", cmd)
-    -- Piper TTS is slow (~8-11s per sentence on Kobo ARM).
-    -- Run it asynchronously so the UI stays responsive.
-    if self.backend == self.BACKENDS.PIPER then
+    -- Neural ONNX TTS backends are slow on Kobo-class ARM devices.
+    -- Run asynchronously so the UI stays responsive.
+    if self.backend == self.BACKENDS.PIPER
+            or self.backend == self.BACKENDS.SUPERTONIC then
         -- Wrap: run synthesis in background, write a marker file when done.
-        -- Capture stderr to a log file so we can detect ONNX Runtime errors
-        -- (e.g. "Protobuf parsing failed") and provide better diagnostics.
+        -- Capture stderr to a log file so we can detect ONNX Runtime errors.
         local done_marker = audio_file .. ".done"
-        local piper_log = "/tmp/.piper_last.log"
+        local is_piper = self.backend == self.BACKENDS.PIPER
+        local is_supertonic = self.backend == self.BACKENDS.SUPERTONIC
+        local neural_log = is_piper and "/tmp/.piper_last.log" or "/tmp/.supertonic_last.log"
         local bg_cmd = string.format(
             '(%s > "%s" 2>&1; echo $? > "%s") &',
-            cmd, piper_log, done_marker
+            cmd, neural_log, done_marker
         )
-        logger.dbg("TTSEngine: Launching Piper async:", bg_cmd)
+        logger.dbg("TTSEngine: Launching neural async:", bg_cmd)
         os.execute(bg_cmd)
         -- Save state for the async completion handler
         local piper_text_file = self._piper_text_file
@@ -719,34 +1008,42 @@ function TTSEngine:synthesizeCommand(text, callback)
                     if size and size > 0 then
                         engine.current_audio_file = audio_file
                         engine:generateTimingEstimates(text)
-                        logger.dbg("TTSEngine: Piper async done, file size:", size)
-                        os.remove(piper_log)
+                        logger.dbg("TTSEngine: Neural async done, file size:", size)
+                        os.remove(neural_log)
                         -- Chain: launch next queued prefetch now that the process slot is free
-                        engine:_launchNextPiperPrefetch()
+                        if is_piper then
+                            engine:_launchNextPiperPrefetch()
+                        end
                         if callback then
                             callback(true, engine.timing_data)
                         end
                         return
                     end
                 end
-                logger.err("TTSEngine: Piper async failed, exit_code:", exit_code)
+                logger.err("TTSEngine: Neural async failed, exit_code:", exit_code)
                 -- Check for ONNX Runtime incompatibility (Protobuf parsing failed).
                 -- Auto-fallback to espeak-ng so the user still gets audio.
-                local log_f = io.open(piper_log, "r")
+                local log_f = io.open(neural_log, "r")
                 local log_text = log_f and log_f:read("*a") or ""
                 if log_f then log_f:close() end
                 if log_text:match("Protobuf parsing failed")
                     or log_text:match("ONNX") then
-                    engine._piper_onnx_broken = true
-                    logger.warn("TTSEngine: Piper ONNX error detected, auto-falling back to espeak-ng")
-                    os.remove(piper_log)
+                    if is_piper then
+                        engine._piper_onnx_broken = true
+                        logger.warn("TTSEngine: Piper ONNX error detected, auto-falling back to espeak-ng")
+                    elseif is_supertonic then
+                        engine._supertonic_onnx_broken = true
+                        logger.warn("TTSEngine: Supertonic ONNX error detected, auto-falling back to espeak-ng")
+                    end
+                    os.remove(neural_log)
                     -- Switch to espeak-ng for this session
                     engine.backend = engine.BACKENDS.ESPEAK
-                    engine.backend_cmd = engine.espeak_cmd
+                    engine.backend_cmd = engine.espeak_bin or "espeak-ng"
                     engine.backend_name = "espeak-ng"
+                    local backend_label = is_piper and "Piper" or "Supertonic"
                     UIManager:show(InfoMessage:new{
                         text = _(
-                            "Piper voice model is incompatible with this device (ONNX Runtime error).\n\n"
+                            backend_label .. " voice model is incompatible with this device (ONNX Runtime error).\n\n"
                             .. "Switching to espeak-ng. You can select a different voice in Audiobook settings."
                         ),
                         timeout = 6,
@@ -754,8 +1051,10 @@ function TTSEngine:synthesizeCommand(text, callback)
                     -- Retry synthesis with espeak-ng
                     return engine:synthesizeCommand(text, callback)
                 end
-                os.remove(piper_log)
-                engine:_launchNextPiperPrefetch()
+                os.remove(neural_log)
+                if is_piper then
+                    engine:_launchNextPiperPrefetch()
+                end
                 if callback then
                     callback(false, nil)
                 end
@@ -765,12 +1064,14 @@ function TTSEngine:synthesizeCommand(text, callback)
             if poll_count < max_polls then
                 UIManager:scheduleIn(0.5, pollPiperDone)
             else
-                logger.err("TTSEngine: Piper timed out after", max_polls * 0.5, "seconds")
+                logger.err("TTSEngine: Neural backend timed out after", max_polls * 0.5, "seconds")
                 -- Clean up
                 if piper_text_file then os.remove(piper_text_file) end
                 os.remove(done_marker)
-                os.remove(piper_log)
-                engine:_launchNextPiperPrefetch()
+                os.remove(neural_log)
+                if is_piper then
+                    engine:_launchNextPiperPrefetch()
+                end
                 if callback then
                     callback(false, nil)
                 end
@@ -933,6 +1234,7 @@ function TTSEngine:generateTimingEstimates(text)
     local current_time = 0
     local pos = 1
     local is_piper = self.backend == self.BACKENDS.PIPER
+        or self.backend == self.BACKENDS.SUPERTONIC
     while pos <= #text do
         -- Skip whitespace
         while pos <= #text and text:sub(pos, pos):match("%s") do
@@ -1120,12 +1422,13 @@ function TTSEngine:prefetch(text)
     if not self.backend or not text or text == "" then
         return false
     end
-    -- Android TTS: skip prefetch.  synthesizeAndroid() is async, but
-    -- prefetch() assumes synchronous completion (save/restore of
+    -- Android TTS / Supertonic: skip prefetch. These backends synthesize
+    -- asynchronously, but prefetch() assumes synchronous completion (save/restore of
     -- current_audio_file).  The async callback overwrites current_audio_file,
     -- then cleanup() deletes the prefetched WAV, breaking the chain.
     -- Android TTS synthesis is fast enough that prefetching isn't needed.
-    if self.backend == self.BACKENDS.ANDROID then
+    if self.backend == self.BACKENDS.ANDROID
+            or self.backend == self.BACKENDS.SUPERTONIC then
         return false
     end
     -- Piper: delegate to the async queue-based prefetcher
@@ -5427,9 +5730,11 @@ function TTSEngine:stop()
         self._socket_clean = false
     end
     
-    -- Kill any background Piper synthesis processes immediately
+    -- Kill any background neural synthesis processes immediately
     if self.backend == self.BACKENDS.PIPER then
         self._piper:killOrphanProcesses()
+    elseif self.backend == self.BACKENDS.SUPERTONIC then
+        os.execute("killall -9 sherpa-onnx-offline-tts 2>/dev/null")
     end
     
     -- Clear concat/prefetch-in-use flag so fullCleanup can delete files
@@ -5508,6 +5813,7 @@ function TTSEngine:forceKillAll()
     -- BT audio driver).  _stopPersistentPipeline already used SIGKILL for
     -- the pipeline; this catches any legacy-path or newly spawned strays.
     os.execute("killall -9 gst-launch-1.0 2>/dev/null")
+    os.execute("killall -9 sherpa-onnx-offline-tts 2>/dev/null")
     -- Full Piper shutdown: stop persistent servers AND kill per-process instances
     self._piper:shutdown()
     self:fullCleanup()
@@ -5565,6 +5871,26 @@ end
 function TTSEngine:setPiperModel(model) self._piper:setModel(model) end
 function TTSEngine:setPiperSpeaker(id)  self._piper:setSpeaker(id) end
 
+function TTSEngine:setSupertonicModelDir(dir)
+    self.supertonic_model_dir = dir
+    self._supertonic_resolved_dir = nil
+end
+
+function TTSEngine:setSupertonicSid(id)
+    self.supertonic_sid = math.max(0, math.floor(tonumber(id) or 0))
+end
+
+function TTSEngine:setSupertonicLang(lang)
+    local normalized = tostring(lang or "en"):lower():gsub("[^%a%-_]", "")
+    if normalized == "" then normalized = "en" end
+    self.supertonic_lang = normalized
+end
+
+function TTSEngine:setSupertonicNumSteps(steps)
+    local n = tonumber(steps) or 8
+    self.supertonic_num_steps = math.max(1, math.min(20, math.floor(n)))
+end
+
 --[[--
 Switch the active TTS backend.
 @param backend string One of TTSEngine.BACKENDS values
@@ -5590,6 +5916,8 @@ function TTSEngine:setBackend(backend)
     -- Restore correct backend_cmd for the selected backend
     if backend == self.BACKENDS.PIPER then
         self.backend_cmd = self.piper_cmd or "piper"
+    elseif backend == self.BACKENDS.SUPERTONIC then
+        self.backend_cmd = self.supertonic_cmd or "sherpa-onnx-offline-tts"
     elseif backend == self.BACKENDS.ESPEAK then
         -- Restore bundled espeak-ng path if available
         local plugin_dir = Utils.normalizeDirPath(self.plugin_dir or "/mnt/onboard/.adds/koreader/plugins/audiobook.koplugin")
@@ -5606,6 +5934,7 @@ end
 
 function TTSEngine:getPiperSampleRate()  return self._piper:getSampleRate() end
 function TTSEngine:listPiperVoices()     return self._piper:listVoices() end
+function TTSEngine:listSupertonicPacks() return self:listSupertonicVoices() end
 
 -- Thin delegates — keep the public API surface unchanged for synccontroller
 function TTSEngine:piperPrefetchAsync(text)     self._piper:enqueue(text) end
