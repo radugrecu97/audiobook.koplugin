@@ -43,3 +43,8 @@ tools/_msgids.json
 tools/_mt_cache.json
 tools/*.pyc
 
+# Secrets & local model downloads
+.env
+.env.*
+piper_models/
+

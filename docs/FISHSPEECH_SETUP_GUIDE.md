@@ -1,0 +1,74 @@
+# Fish Speech (S2 Pro) Aligned Audiobook Setup Guide
+
+This guide explains how to set up **Fish Speech (S2 Pro / v1.4 / v1.5)** on your PC to generate high-fidelity, multilingual, voice-cloned EPUB 3 audiobooks with synchronized highlighting and tap-to-seek on your **Kobo e-reader**.
+
+---
+
+## 1. Running Fish Speech Locally on your PC
+
+### Option A: Using Fish Speech Git & Python
+1. Clone the Fish Speech repository:
+   ```bash
+   git clone https://github.com/fishaudio/fish-speech.git
+   cd fish-speech
+   ```
+2. Install dependencies (PyTorch with CUDA recommended):
+   ```bash
+   pip install -e .
+   ```
+3. Start the API server on port 8080:
+   ```bash
+   python -m fish_speech.api.server --listen 127.0.0.1:8080
+   ```
+
+### Option B: Using Fish Speech WebUI / Docker
+1. Start the Fish Speech Docker container or WebUI:
+   ```bash
+   docker run --gpus all -p 8080:8080 fishaudio/fish-speech:latest
+   ```
+2. The HTTP API endpoint will be live at `http://127.0.0.1:8080/v1/tts`.
+
+---
+
+## 2. Converting EPUB with Fish Speech
+
+Once the Fish Speech server is running, generate the aligned EPUB:
+
+### 1. English (or other languages) with Default Voice
+```bash
+python tools/epub_to_audiobook_fishspeech.py -i book.epub -o book_audiobook.epub --lang en
+```
+
+### 2. Zero-Shot Voice Cloning (Custom Voice Reference)
+Provide a 5–15 second clean `.wav` sample and its transcript:
+```bash
+python tools/epub_to_audiobook_fishspeech.py \
+  -i book.epub \
+  -o book_cloned_audiobook.epub \
+  --prompt-audio my_narrator_sample.wav \
+  --prompt-text "This is a clean recording of the narrator's voice." \
+  --lang en
+```
+
+### 3. Other Supported Languages
+* German: `--lang de`
+* French: `--lang fr`
+* Spanish: `--lang es`
+* Italian: `--lang it`
+* Hungarian: `--lang hu`
+* Japanese: `--lang ja`
+* Chinese: `--lang zh`
+
+### 4. Test on a Few Chapters First
+```bash
+python tools/epub_to_audiobook_fishspeech.py -i book.epub --start-chapter 1 --end-chapter 2
+```
+
+---
+
+## 3. Reading on Kobo with KOReader
+
+1. Copy `book_audiobook.epub` to your Kobo storage (e.g. `/mnt/onboard/books/`).
+2. Open the book in KOReader.
+3. Long-press any word on the screen $\rightarrow$ tap **Play aligned audiobook from here**.
+4. The Fish Speech neural narration begins immediately from that word, with synchronized screen highlights and automatic page turns.
