@@ -180,6 +180,10 @@ function Audiobook:init()
     -- favor of a registration API; on older releases onDictButtonsReady()
     -- below still receives the event and appends the same buttons.
     self:_registerDictButtons()
+
+    -- Install ZenOS compatibility hooks so highlight and dict buttons
+    -- are not filtered out when ZenOS UI is active.
+    self:_installZenOSCompatibility()
 end
 
 --[[--
@@ -211,6 +215,193 @@ function Audiobook:_registerDictButtons()
             end)
         end,
     })
+end
+
+function Audiobook:_getActiveInstance()
+    local ok_ru, ReaderUI = pcall(require, "apps/reader/readerui")
+    if ok_ru and ReaderUI and ReaderUI.instance and ReaderUI.instance.audiobook then
+        return ReaderUI.instance.audiobook
+    end
+    local ok_fm, FileManager = pcall(require, "apps/filemanager/filemanager")
+    if ok_fm and FileManager and FileManager.instance and FileManager.instance.audiobook then
+        return FileManager.instance.audiobook
+    end
+    return self
+end
+
+function Audiobook:_hasActiveDocument()
+    local active = self:_getActiveInstance()
+    if active and active.ui and active.ui.document then return true end
+    local ok_ru, ReaderUI = pcall(require, "apps/reader/readerui")
+    if ok_ru and ReaderUI and ReaderUI.instance and ReaderUI.instance.document then
+        return true
+    end
+    return false
+end
+
+--[[--
+Install ZenOS compatibility hooks so that audiobook highlight menu buttons
+and dictionary popup buttons are not filtered out when ZenOS UI is active.
+--]]
+function Audiobook:_installZenOSCompatibility()
+    local plugin = self
+
+    -- 1. Extend ZenOS LookupPluginItems if available
+    local function patchLookupPluginItems(LookupPluginItems)
+        if not LookupPluginItems or LookupPluginItems._audiobook_patched then return end
+        LookupPluginItems._audiobook_patched = true
+
+        local orig_settingForHighlightKey = LookupPluginItems.settingForHighlightKey
+        LookupPluginItems.settingForHighlightKey = function(key)
+            if type(key) == "string" then
+                local name = key:match("^%d+_(.*)$") or key
+                if name == "play_aligned" or name:find("audiobook", 1, true) then
+                    return "show_audiobook"
+                end
+            end
+            if orig_settingForHighlightKey then
+                return orig_settingForHighlightKey(key)
+            end
+        end
+
+        local orig_settingForDictButton = LookupPluginItems.settingForDictButton
+        LookupPluginItems.settingForDictButton = function(button)
+            if type(button) == "table" then
+                local id = button.id
+                if id == "audiobook_play_aligned" or (type(id) == "string" and id:find("audiobook", 1, true)) then
+                    return "show_audiobook"
+                end
+                local label = button.text
+                if type(label) ~= "string" and type(button.text_func) == "function" then
+                    local ok, text = pcall(button.text_func)
+                    if ok then label = text end
+                end
+                if type(label) == "string" and (label:find("audiobook", 1, true) or label:find("Read aloud", 1, true)) then
+                    return "show_audiobook"
+                end
+            end
+            if orig_settingForDictButton then
+                return orig_settingForDictButton(button)
+            end
+        end
+
+        local orig_shouldShow = LookupPluginItems.shouldShow
+        LookupPluginItems.shouldShow = function(config, setting)
+            if setting == "show_audiobook" then
+                local lookup = type(config) == "table" and config.highlight_lookup
+                if type(lookup) == "table" and lookup.show_audiobook == false then
+                    return false
+                end
+                return true
+            end
+            if orig_shouldShow then
+                return orig_shouldShow(config, setting)
+            end
+            return true
+        end
+    end
+
+    local lpi = package.loaded["modules/reader/lookup_plugin_items"]
+    if lpi then
+        patchLookupPluginItems(lpi)
+    else
+        local ok_lpi, loaded_lpi = pcall(require, "modules/reader/lookup_plugin_items")
+        if ok_lpi and loaded_lpi then
+            patchLookupPluginItems(loaded_lpi)
+        end
+    end
+
+    -- 2. Fallback patch on DictQuickLookup in case ZenOS DictQuickLookup patch is active
+    local ok_dql, DictQuickLookup = pcall(require, "ui/widget/dictquicklookup")
+    if ok_dql and DictQuickLookup and DictQuickLookup.buildButtonLayout and not DictQuickLookup._audiobook_fallback_patched then
+        DictQuickLookup._audiobook_fallback_patched = true
+        local orig_buildButtonLayout = DictQuickLookup.buildButtonLayout
+        DictQuickLookup.buildButtonLayout = function(self_dql)
+            local layout = orig_buildButtonLayout(self_dql)
+            if not layout or self_dql.is_wiki or self_dql.is_wiki_fullpage then
+                return layout
+            end
+
+            local active = plugin:_getActiveInstance()
+            if not (active and active._init_ok and active:_hasMediaOverlays()) then
+                return layout
+            end
+
+            for _i, row in ipairs(layout) do
+                for _j, btn in ipairs(row) do
+                    if btn.id == "audiobook_play_aligned" then
+                        return layout
+                    end
+                end
+            end
+
+            local play_btn = {
+                id = "audiobook_play_aligned",
+                text = _("Play aligned audiobook from here"),
+                font_bold = false,
+                callback = function()
+                    local selected_text = nil
+                    if self_dql.highlight and self_dql.highlight.selected_text then
+                        selected_text = self_dql.highlight.selected_text
+                    end
+                    UIManager:close(self_dql)
+                    UIManager:scheduleIn(0.3, function()
+                        active:startAlignedAudioFromSelection(selected_text)
+                    end)
+                end,
+            }
+            table.insert(layout, { play_btn })
+            return layout
+        end
+    end
+
+    -- 3. Fallback patch on ReaderHighlight in case ZenOS HighlightMenu patch is active
+    local ok_rh, ReaderHighlight = pcall(require, "apps/reader/modules/readerhighlight")
+    if ok_rh and ReaderHighlight and ReaderHighlight.onShowHighlightMenu and not ReaderHighlight._audiobook_fallback_patched then
+        ReaderHighlight._audiobook_fallback_patched = true
+        local orig_onShowHighlightMenu = ReaderHighlight.onShowHighlightMenu
+        ReaderHighlight.onShowHighlightMenu = function(self_rh, index)
+            local active = plugin:_getActiveInstance()
+            local had_dlg = self_rh.highlight_dialog
+
+            orig_onShowHighlightMenu(self_rh, index)
+
+            if not (active and active._init_ok and active:_hasMediaOverlays()) then
+                return
+            end
+
+            local dlg = self_rh.highlight_dialog
+            if not dlg or dlg == had_dlg or not dlg.buttons then
+                return
+            end
+
+            local found = false
+            for _i, row in ipairs(dlg.buttons) do
+                for _j, btn in ipairs(row) do
+                    if btn.text == _("Play aligned audiobook from here") or btn.id == "audiobook_play_aligned" then
+                        found = true
+                        break
+                    end
+                end
+                if found then break end
+            end
+
+            if not found then
+                local play_btn = {
+                    text = _("Play aligned audiobook from here"),
+                    callback = function()
+                        local selected_text = self_rh.selected_text
+                        if self_rh.onClose then self_rh:onClose() end
+                        if dlg.onClose then dlg:onClose() end
+                        UIManager:scheduleIn(0.3, function()
+                            active:startAlignedAudioFromSelection(selected_text)
+                        end)
+                    end,
+                }
+                table.insert(dlg.buttons, { play_btn })
+            end
+        end
+    end
 end
 
 function Audiobook:_initSubmodules()
@@ -386,12 +577,14 @@ function Audiobook:onDispatcherRegisterActions()
         event = "AudiobookToggle",
         title = _("Toggle Read-Along"),
         reader = true,
+        filemanager = true,
     })
     Dispatcher:registerAction("audiobook_stop", {
         category = "none",
         event = "AudiobookStop",
         title = _("Stop Read-Along"),
         reader = true,
+        filemanager = true,
     })
 end
 
@@ -407,6 +600,10 @@ function Audiobook:_showInitError()
 end
 
 function Audiobook:addToMainMenu(menu_items)
+    local active = self:_getActiveInstance()
+    if active ~= self and active.addToMainMenu then
+        return active:addToMainMenu(menu_items)
+    end
     -- If Phase 1 module loading failed, show a minimal error menu.
     -- The full menu references modules (BtUI, MenuBuilder, T) that are nil
     -- when loading fails, so we must not build it.
@@ -3002,6 +3199,10 @@ end
 
 -- Event handlers
 function Audiobook:onAudiobookToggle()
+    local active = self:_getActiveInstance()
+    if active ~= self and active.onAudiobookToggle then
+        return active:onAudiobookToggle()
+    end
     if not self._init_ok then self:_showInitError(); return true end
     -- When media playback is active (no document needed), toggle that
     if self.media_sync and self.media_sync.state ~= "stopped" then
@@ -3025,6 +3226,10 @@ function Audiobook:onAudiobookToggle()
 end
 
 function Audiobook:onAudiobookStop()
+    local active = self:_getActiveInstance()
+    if active ~= self and active.onAudiobookStop then
+        return active:onAudiobookStop()
+    end
     if not self._init_ok then return true end
     logger.warn("Audiobook: onAudiobookStop event received")
     self:stopReadAlong()
