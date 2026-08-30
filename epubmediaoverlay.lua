@@ -222,24 +222,17 @@ function EpubMediaOverlay:_findOpfPath(epub_path)
         return nil
     end
 
-    -- Parse container.xml for full-path attribute
+    -- Parse container.xml for full-path attribute (supports "..." and '...')
     local opf_path = container_xml:match('full%-path%s*=%s*"([^"]+)"')
-    if not opf_path then
-        -- Try without escaping the hyphen
-        opf_path = container_xml:match('full%-path%s*=%s*"([^"]+)"')
-    end
-    if not opf_path then
-        -- Fallback: look for any .opf reference
-        opf_path = container_xml:match('href%s*=%s*"([^"]-%.opf)"')
-    end
+        or container_xml:match("full%-path%s*=%s*'([^']+)'")
+        or container_xml:match('href%s*=%s*"([^"]-%.opf)"')
+        or container_xml:match("href%s*=%s*'([^']-%.opf)'")
 
     return opf_path
 end
 
 function EpubMediaOverlay:_parseOpfManifest(opf_xml)
     opf_xml = self:_compactXml(opf_xml)
-    -- Extract manifest items from OPF.
-    -- We need: items with media-overlay attributes, and the smil files they reference.
     local manifest = {}
     local manifest_items = {}
 
@@ -250,16 +243,12 @@ function EpubMediaOverlay:_parseOpfManifest(opf_xml)
         return nil
     end
 
-    -- Parse each item in the manifest.
-    -- The character class must allow '/' inside the capture: hrefs are
-    -- paths ("text/part0007.html", "MediaOverlays/part0007.smil"), and a
-    -- class of [^/>] silently dropped every such item, leaving the
-    -- overlay map empty ("no media overlays found") on real books.
-    for item_str in manifest_block:gmatch("<item([^>]-)/>") do
-        local id = item_str:match('id%s*=%s*"([^"]+)"')
-        local href = item_str:match('href%s*=%s*"([^"]+)"')
-        local media_type = item_str:match('media%-type%s*=%s*"([^"]+)"')
-        local media_overlay = item_str:match('media%-overlay%s*=%s*"([^"]+)"')
+    -- Parse each item in the manifest (supports <item .../>, <item ...>, and both " and ' quotes)
+    for item_str in manifest_block:gmatch("<item%s+([^>]-)/?>") do
+        local id = item_str:match('id%s*=%s*"([^"]+)"') or item_str:match("id%s*=%s*'([^']+)'")
+        local href = item_str:match('href%s*=%s*"([^"]+)"') or item_str:match("href%s*=%s*'([^']+)'")
+        local media_type = item_str:match('media%-type%s*=%s*"([^"]+)"') or item_str:match("media%-type%s*=%s*'([^']+)'")
+        local media_overlay = item_str:match('media%-overlay%s*=%s*"([^"]+)"') or item_str:match("media%-overlay%s*=%s*'([^']+)'")
 
         if id and href then
             manifest_items[id] = {
@@ -319,18 +308,18 @@ function EpubMediaOverlay:_parseSmil(smil_xml, smil_base_path)
         -- Extract text src (match the <text> element specifically; a bare
         -- src= match would also hit <audio src=...>)
         local text_src = par_block:match('<text[^>]-src%s*=%s*"([^"]+)"')
+            or par_block:match("<text[^>]-src%s*=%s*'([^']+)'")
             or par_block:match('src%s*=%s*"([^"]+)"')
-        -- Extract audio attributes ('/' must stay allowed in the capture:
-        -- src paths contain slashes)
+            or par_block:match("src%s*=%s*'([^']+)'")
+
         local audio_block = par_block:match("<audio([^>]-)/>")
-        if not audio_block then
-            audio_block = par_block:match("<audio" .. RE_ANY_LAZY .. "</audio>")
-        end
+            or par_block:match("<audio" .. RE_ANY_LAZY .. "</audio>")
+            or par_block:match("<audio([^>]-)>")
 
         if audio_block then
-            local audio_src = audio_block:match('src%s*=%s*"([^"]+)"')
-            local clip_begin = audio_block:match('clipBegin%s*=%s*"([^"]+)"')
-            local clip_end = audio_block:match('clipEnd%s*=%s*"([^"]+)"')
+            local audio_src = audio_block:match('src%s*=%s*"([^"]+)"') or audio_block:match("src%s*=%s*'([^']+)'")
+            local clip_begin = audio_block:match('clipBegin%s*=%s*"([^"]+)"') or audio_block:match("clipBegin%s*=%s*'([^']+)'")
+            local clip_end = audio_block:match('clipEnd%s*=%s*"([^"]+)"') or audio_block:match("clipEnd%s*=%s*'([^']+)'")
 
             if audio_src then
                 -- Resolve relative paths

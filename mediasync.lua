@@ -1879,6 +1879,11 @@ function MediaSync:showPlaybackBar()
             if not (p and p.getSetting) then return nil end
             local v = (p:getSetting("smil_sync_offset_ms", 0) or 0) + delta_ms
             p:setSetting("smil_sync_offset_ms", v)
+            -- Force immediate highlight update with the new offset
+            local pos = self.media_engine and self.media_engine:getPosition() or 0
+            local lat = (self.media_engine and self.media_engine.position_latency_s) or 0
+            self._current_sentence_idx = nil
+            self:_updateHighlightAtTime(math.max(0, pos - lat - (v / 1000)))
             return v
         end or nil,
         show_shuffle = self.playlist_files and #self.playlist_files > 0,

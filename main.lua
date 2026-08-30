@@ -154,35 +154,10 @@ function Audiobook:init()
     -- by _registerDictButtons on KOReader >= 2026.07 and by the legacy
     -- onDictButtonsReady event handler on older releases).
     if self.ui.highlight and self.ui.highlight.addToHighlightDialog then
-        self.ui.highlight:addToHighlightDialog("15_read_aloud", function(this)
-            return {
-                text = _("Read aloud from here"),
-                callback = function()
-                    if not self._init_ok then
-                        self:_showInitError()
-                        return
-                    end
-                    local selected_text = this.selected_text
-                    local context = nil
-                    if selected_text then
-                        context = {
-                            pos0 = selected_text.pos0,
-                            pos1 = selected_text.pos1,
-                        }
-                    end
-                    this:onClose()
-                    UIManager:scheduleIn(0.3, function()
-                        local word = selected_text and selected_text.text
-                        if word then
-                            -- Use the first word for position matching
-                            word = word:match("^%s*(%S+)") or word
-                        end
-                        self:startReadAlongFromWord(word, context)
-                    end)
-                end,
-            }
-        end)
         self.ui.highlight:addToHighlightDialog("16_play_aligned", function(this)
+            if not self._init_ok or not self:_hasMediaOverlays() then
+                return nil
+            end
             return {
                 text = _("Play aligned audiobook from here"),
                 callback = function()
@@ -208,13 +183,8 @@ function Audiobook:init()
 end
 
 --[[--
-Register "Read aloud from here" / "Play aligned audiobook from here" in the
-single-word dictionary popup via ReaderDictionary:addToDictButtons (KOReader
->= 2026.07).  No-op on older KOReader, where the DictButtonsReady event is
-still broadcast and handled by onDictButtonsReady().
-
-Both buttons use conditional = true: transient rows appended at the end,
-mirroring the old table.insert(buttons, ...) placement.
+Register "Play aligned audiobook from here" in the single-word dictionary popup
+via ReaderDictionary:addToDictButtons (KOReader >= 2026.07).
 --]]
 function Audiobook:_registerDictButtons()
     if not (self.ui.dictionary and self.ui.dictionary.addToDictButtons) then
@@ -223,47 +193,12 @@ function Audiobook:_registerDictButtons()
     local plugin = self
 
     self.ui.dictionary:addToDictButtons({
-        id = "audiobook_read",
-        text = _("Read aloud from here"),
-        font_bold = false,
-        conditional = true,
-        show_func = function(dict_popup)
-            return plugin._init_ok and not dict_popup.is_wiki_fullpage
-        end,
-        callback = function(dict_popup)
-            local word = dict_popup.word or dict_popup.lookupword
-            -- Capture surrounding text context from the highlight selection
-            -- so we can find the correct occurrence of the word on the page,
-            -- not just the first one.
-            local selected_text_context = nil
-            if dict_popup.highlight and dict_popup.highlight.selected_text then
-                local sel = dict_popup.highlight.selected_text
-                -- For CRe docs, pos0 is an xpointer string with an offset;
-                -- for paged docs it's a table.  Either way, save the surrounding
-                -- selected text or the raw pos0 for position matching.
-                selected_text_context = {
-                    pos0 = sel.pos0,
-                    pos1 = sel.pos1,
-                }
-            end
-            UIManager:close(dict_popup)
-            -- Give the dictionary popup and any parent highlight enough time
-            -- to fully close and leave the UIManager window stack before we
-            -- add the PlaybackBar.  Too short a delay means _isOverlayActive()
-            -- still sees stale non-toast widgets and suppresses the bar.
-            UIManager:scheduleIn(0.3, function()
-                plugin:startReadAlongFromWord(word, selected_text_context)
-            end)
-        end,
-    })
-
-    self.ui.dictionary:addToDictButtons({
         id = "audiobook_play_aligned",
         text = _("Play aligned audiobook from here"),
         font_bold = false,
         conditional = true,
         show_func = function(dict_popup)
-            return plugin._init_ok and not dict_popup.is_wiki_fullpage
+            return plugin._init_ok and not dict_popup.is_wiki_fullpage and plugin:_hasMediaOverlays()
         end,
         callback = function(dict_popup)
             local selected_text = nil
@@ -1157,44 +1092,13 @@ end
 --- new addToDictButtons API instead.  Keep this handler so older releases
 --- still get the buttons.
 function Audiobook:onDictButtonsReady(dict_popup, buttons)
-    if not self._init_ok then return end
+    if not self._init_ok or not self:_hasMediaOverlays() then return end
     if dict_popup.is_wiki_fullpage then
         return
     end
     
     local plugin = self
     
-    -- Add "Read aloud from here" button at the end (below Wikipedia/Search/Close)
-    table.insert(buttons, {{
-        id = "audiobook_read",
-        text = _("Read aloud from here"),
-        font_bold = false,
-        callback = function()
-            local word = dict_popup.word or dict_popup.lookupword
-            -- Capture surrounding text context from the highlight selection
-            -- so we can find the correct occurrence of the word on the page,
-            -- not just the first one.
-            local selected_text_context = nil
-            if dict_popup.highlight and dict_popup.highlight.selected_text then
-                local sel = dict_popup.highlight.selected_text
-                -- For CRe docs, pos0 is an xpointer string with an offset;
-                -- for paged docs it's a table.  Either way, save the surrounding
-                -- selected text or the raw pos0 for position matching.
-                selected_text_context = {
-                    pos0 = sel.pos0,
-                    pos1 = sel.pos1,
-                }
-            end
-            UIManager:close(dict_popup)
-            -- Give the dictionary popup and any parent highlight enough time
-            -- to fully close and leave the UIManager window stack before we
-            -- add the PlaybackBar.  Too short a delay means _isOverlayActive()
-            -- still sees stale non-toast widgets and suppresses the bar.
-            UIManager:scheduleIn(0.3, function()
-                plugin:startReadAlongFromWord(word, selected_text_context)
-            end)
-        end,
-    }})
     table.insert(buttons, {{
         id = "audiobook_play_aligned",
         text = _("Play aligned audiobook from here"),
@@ -1339,14 +1243,16 @@ end
 
 function Audiobook:_documentHasMediaOverlays(doc_path)
     if not doc_path then return false end
-    local ext = doc_path:match("%.([^.]+)$") or ""
-    if ext:lower() ~= "epub" then return false end
+    local lower = doc_path:lower()
+    if not (lower:match("%.epub$") or lower:match("%.kepub$") or lower:match("%.kepub%.epub$")) then
+        return false
+    end
     -- Quick zip listing check for .smil files
     local h = io.popen('unzip -l "' .. doc_path:gsub('"', '\\"') .. '" 2>/dev/null | grep -i "\\.smil"')
     if h then
         local out = h:read("*a") or ""
         h:close()
-        if out:match("%.smil") then
+        if out:match("%.[sS][mM][iI][lL]") then
             return true
         end
     end
@@ -1355,7 +1261,6 @@ end
 
 function Audiobook:_hasMediaOverlays()
     if not self.ui or not self.ui.document then return false end
-    if not self.ui.rolling then return false end
     local doc_path = self.ui.document.file_path or self.ui.document.file
     return self:_documentHasMediaOverlays(doc_path)
 end
@@ -2540,34 +2445,6 @@ function Audiobook:_matchSmilEntryFromSelection(selected_text, timing_data, pars
     local sel_text = self:_normalizeSelText(selected_text.text)
     if sel_text == "" then return nil end
 
-    -- Expand short selections with nearby on-screen text.
-    local word_count = 0
-    for _ in sel_text:gmatch("%S+") do word_count = word_count + 1 end
-    if word_count <= 3 and selected_text.pos0 and self.ui and self.ui.document
-        and self.ui.document.getScreenPositionFromXPointer
-        and self.ui.document.getTextFromPositions then
-        local ok_y, screen_y = pcall(
-            self.ui.document.getScreenPositionFromXPointer,
-            self.ui.document, selected_text.pos0)
-        if ok_y and screen_y then
-            local ScreenDev = Device.screen
-            local y0 = math.max(0, screen_y - 60)
-            local y1 = math.min(ScreenDev:getHeight(), screen_y + 100)
-            local ok_t, res = pcall(
-                self.ui.document.getTextFromPositions,
-                self.ui.document,
-                {x = 0, y = y0},
-                {x = ScreenDev:getWidth(), y = y1},
-                true)
-            if ok_t and res and res.text and #res.text > #sel_text then
-                local expanded = self:_normalizeSelText(res.text)
-                if expanded:find(sel_text, 1, true) then
-                    sel_text = expanded
-                end
-            end
-        end
-    end
-
     local cur_xp = self.ui and self.ui.document and self.ui.document:getXPointer()
     local frag_idx = cur_xp and tonumber(cur_xp:match("DocFragment%[(%d+)%]"))
     local spine = parser and parser._spine_hrefs or {}
@@ -2577,10 +2454,6 @@ function Audiobook:_matchSmilEntryFromSelection(selected_text, timing_data, pars
         if not cur_base then return true end
         return e.text_doc and e.text_doc:match("([^/]+)$") == cur_base
     end
-
-    -- Needle: prefer a distinctive prefix of the selection.
-    local needle = sel_text
-    if #needle > 80 then needle = needle:sub(1, 80) end
 
     local sel_y = nil
     if selected_text.pos0 and self.ui and self.ui.document
@@ -2599,24 +2472,25 @@ function Audiobook:_matchSmilEntryFromSelection(selected_text, timing_data, pars
             if et == sel_text then
                 score = 10000
             elseif et:find(sel_text, 1, true) then
+                -- The sentence contains the tapped word/phrase
                 score = 5000 + math.min(#sel_text, 200)
             elseif sel_text:find(et, 1, true) then
                 score = 4000 + math.min(#et, 200)
-            elseif et:find(needle, 1, true) then
-                score = 2000 + math.min(#needle, 80)
-            elseif needle:find(et:sub(1, math.min(40, #et)), 1, true) then
-                score = 1000
             end
+
+            -- Screen-coordinate proximity weighting: when multiple sentences
+            -- match (or contain the same word), pick the one physically closest
+            -- to where the user tapped on screen.
             if score > 0 and sel_y and e.fragment_id and self.ui.document.getScreenPositionFromXPointer then
                 local ok_fy, fy = pcall(
                     self.ui.document.getScreenPositionFromXPointer,
                     self.ui.document, "#" .. e.fragment_id)
                 if ok_fy and fy then
-                    -- Closer on screen → higher score (up to +500).
                     local dist = math.abs(fy - sel_y)
-                    score = score + math.max(0, 500 - math.floor(dist / 2))
+                    score = score + math.max(0, 1000 - math.floor(dist * 2))
                 end
             end
+
             if score > best_score then
                 best_score = score
                 best = e
@@ -2626,7 +2500,7 @@ function Audiobook:_matchSmilEntryFromSelection(selected_text, timing_data, pars
 
     if best then
         logger.warn("Audiobook: matched selection by scored text",
-            best.fragment_id, "score", best_score, "needle", needle:sub(1, 60))
+            best.fragment_id, "score", best_score, "selected", sel_text:sub(1, 40))
         return best
     end
     return nil

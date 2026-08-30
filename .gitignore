@@ -37,11 +37,11 @@ subprocess
 zipfile
 EOF
 
-# i18n tooling caches
-tools/__pycache__/
+# Python tooling caches
+**/__pycache__/
+*.pyc
 tools/_msgids.json
 tools/_mt_cache.json
-tools/*.pyc
 
 # Secrets & local model downloads
 .env

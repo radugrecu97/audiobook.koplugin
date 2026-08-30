@@ -553,14 +553,14 @@ function AudiobookPlayer:setupUI()
     self.dimen.y = 0
 
     -- ── Mini-player bar (shown when minimized) ──
-    self._mini_height = Screen:scaleBySize(44)
-    local mini_btn_size = self._mini_height - 20  -- keep clear of the mini bar border
+    self._mini_height = Screen:scaleBySize(68)
+    local mini_btn_size = Screen:scaleBySize(46)
 
     self._mini_play_pause = Button:new{
         text = self.is_playing and "⏸" or "▶",
         width = mini_btn_size,
         height = mini_btn_size,
-        text_font_size = 18,
+        text_font_size = 24,
         callback = function() self:onPlayPause() end,
         bordersize = 0,
         show_parent = self,
@@ -570,7 +570,7 @@ function AudiobookPlayer:setupUI()
         text = "✕",
         width = mini_btn_size,
         height = mini_btn_size,
-        text_font_size = 16,
+        text_font_size = 20,
         callback = function() self:onClose() end,
         bordersize = 0,
         show_parent = self,
@@ -582,7 +582,7 @@ function AudiobookPlayer:setupUI()
             text = "○",
             width = mini_btn_size,
             height = mini_btn_size,
-            text_font_size = 18,
+            text_font_size = 22,
             callback = function() self:onRefocus() end,
             bordersize = 0,
             show_parent = self,
@@ -620,7 +620,7 @@ function AudiobookPlayer:setupUI()
             text = "−",
             width = mini_btn_size,
             height = mini_btn_size,
-            text_font_size = 16,
+            text_font_size = 22,
             callback = function() nudge(-100) end,
             bordersize = 0,
             show_parent = self,
@@ -629,7 +629,7 @@ function AudiobookPlayer:setupUI()
             text = "+",
             width = mini_btn_size,
             height = mini_btn_size,
-            text_font_size = 16,
+            text_font_size = 22,
             callback = function() nudge(100) end,
             bordersize = 0,
             show_parent = self,
@@ -652,7 +652,7 @@ function AudiobookPlayer:setupUI()
             text = "♪−",
             width = mini_btn_size,
             height = mini_btn_size,
-            text_font_size = 13,
+            text_font_size = 16,
             callback = function() self:_applyVolume(-10) end,
             bordersize = 0,
             show_parent = self,
@@ -661,7 +661,7 @@ function AudiobookPlayer:setupUI()
             text = "♪+",
             width = mini_btn_size,
             height = mini_btn_size,
-            text_font_size = 13,
+            text_font_size = 16,
             callback = function() self:_applyVolume(10) end,
             bordersize = 0,
             show_parent = self,
@@ -683,7 +683,7 @@ function AudiobookPlayer:setupUI()
             text = "☰",
             width = mini_btn_size,
             height = mini_btn_size,
-            text_font_size = 16,
+            text_font_size = 20,
             callback = function() self:onChapterList() end,
             bordersize = 0,
             show_parent = self,
@@ -700,13 +700,13 @@ function AudiobookPlayer:setupUI()
     self._mini_title = TextWidget:new{
         text = (self.chapter_title and self.chapter_title ~= "" and self.chapter_title)
             or self.output_name or self.title or _("Audiobook"),
-        face = Font:getFace("cfont", 13),
+        face = Font:getFace("cfont", 16),
         max_width = center_max_width,
         truncate_left = false,
     }
     self._mini_time = TextWidget:new{
         text = self.current_time_str or "",
-        face = Font:getFace("cfont", 11),
+        face = Font:getFace("cfont", 13),
         max_width = center_max_width,
     }
     local mini_center = VerticalGroup:new{

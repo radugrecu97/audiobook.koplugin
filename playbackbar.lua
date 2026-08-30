@@ -70,10 +70,10 @@ function PlaybackBar:init()
 end
 
 function PlaybackBar:setupUI()
-    local button_width = Screen:scaleBySize(60)
-    local button_height = Screen:scaleBySize(40)
-    local button_font_size = 20
-    local spacing = Size.padding.large
+    local button_width = Screen:scaleBySize(74)
+    local button_height = Screen:scaleBySize(50)
+    local button_font_size = Screen:scaleBySize(24)
+    local spacing = Size.padding.default
     
     -- Rewind button (previous paragraph)
     self.rewind_button = Button:new{
@@ -158,7 +158,7 @@ function PlaybackBar:setupUI()
     end
     self.word_display = TextWidget:new{
         text = display_text,
-        face = Font:getFace("cfont", 16),
+        face = Font:getFace("cfont", 18),
         max_width = self.width - button_width * 5 - spacing * 7,
         truncate_left = true,
     }

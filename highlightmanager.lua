@@ -136,19 +136,18 @@ function HighlightManager:highlightSentence(sentence, parsed_data)
 
     local doc = self.ui.document
 
-    -- EPUB / rolling mode: use screen-coordinate selection.
-    -- Returns true when the sentence was found and highlighted on the
-    -- visible page (callers use this for read-along page advancement).
-    if self.ui.rolling then
-        -- Storyteller / EPUB3 Media Overlays: prefer the SMIL fragment id
-        -- (Readest-style) over fuzzy on-screen text matching.
-        if sentence.fragment_id then
-            local ok = self:_highlightByFragmentId(doc, sentence.fragment_id)
-            if ok then return true end
-        end
+    -- 1. EPUB3 Media Overlays: prefer the exact SMIL fragment id (Readest-style)
+    -- over fuzzy on-screen text matching whenever CRe DOM is available.
+    if sentence.fragment_id and doc.getNormalizedXPointer then
+        local ok = self:_highlightByFragmentId(doc, sentence.fragment_id)
+        if ok then return true end
+    end
+
+    -- 2. CRe on-screen text matching (works for all EPUB rolling and paged modes)
+    if doc.getTextFromPositions or self.ui.rolling then
         return self:_highlightSentenceRolling(sentence, parsed_data, doc)
     else
-        -- PDF / paged mode: use view.highlight.temp
+        -- 3. PDF / fixed layout fallback
         return self:_highlightSentencePaging(sentence, parsed_data, doc)
     end
 end
