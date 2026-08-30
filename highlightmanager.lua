@@ -490,36 +490,65 @@ function HighlightManager:_highlightSentenceRolling(sentence, parsed_data, doc, 
     end_x = refineEndX(start_x, start_y, end_y)
 
     -- ── Phase 3: Refine start_x if sentence starts mid-line ──────
-    -- Same problem: proportional estimate may land on wrong word.
     if sl_off > 1 then
         local got = querySelection(start_x, start_y, end_x, end_y)
         if got ~= sent_text then
             local got_start = got:sub(1, math.min(20, #got))
             local want_start = sent_text:sub(1, math.min(20, #sent_text))
-            -- If the start is wrong, binary-search start_x
             if got_start ~= want_start then
                 local lo = sb.x
-                local hi = start_x + math.floor(sb.w * 0.3) -- don't search too far right
+                local hi = start_x + math.floor(sb.w * 0.3)
                 hi = math.min(hi, sb.x + sb.w - 1)
                 local best_x = start_x
-                for iter = 1, 6 do
-                    if hi - lo < 2 then break end
-                    local mid = math.floor((lo + hi) / 2)
-                    local mid_text = querySelection(mid, start_y, end_x, end_y)
-                    local mid_start = mid_text:sub(1, math.min(20, #mid_text))
-                    if mid_start == want_start then
-                        best_x = mid
-                        -- Expand left to find leftmost pixel that still
-                        -- selects the correct first word.  This ensures the
-                        -- visual highlight box covers the full first word.
-                        hi = mid
-                    else
-                        -- Went too far left (includes previous word) — go right
-                        lo = mid
+
+                -- Phase 3a: leftward probe (handles proportional font overshoots)
+                for _, try_x in ipairs({
+                    start_x - math.floor(sb.w * 0.05),
+                    start_x - math.floor(sb.w * 0.10),
+                    start_x - math.floor(sb.w * 0.15),
+                    start_x - math.floor(sb.w * 0.20),
+                    lo,
+                }) do
+                    try_x = math.max(lo, try_x)
+                    local try_text = querySelection(try_x, start_y, end_x, end_y)
+                    local try_start = try_text:sub(1, math.min(20, #try_text))
+                    if try_start == want_start then
+                        best_x = try_x
+                        -- Binary search rightward to find tightest box
+                        local bs_lo, bs_hi = try_x, start_x
+                        for _iter = 1, 6 do
+                            if bs_hi - bs_lo < 2 then break end
+                            local mid = math.floor((bs_lo + bs_hi) / 2)
+                            local mid_text = querySelection(mid, start_y, end_x, end_y)
+                            local mid_start = mid_text:sub(1, math.min(20, #mid_text))
+                            if mid_start == want_start then
+                                best_x = mid
+                                bs_lo = mid
+                            else
+                                bs_hi = mid
+                            end
+                        end
+                        break
                     end
                 end
+
+                -- Phase 3b: rightward fallback if estimate was too far left
+                if best_x == start_x then
+                    for _iter = 1, 6 do
+                        if hi - lo < 2 then break end
+                        local mid = math.floor((lo + hi) / 2)
+                        local mid_text = querySelection(mid, start_y, end_x, end_y)
+                        local mid_start = mid_text:sub(1, math.min(20, #mid_text))
+                        if mid_start == want_start then
+                            best_x = mid
+                            hi = mid
+                        else
+                            lo = mid
+                        end
+                    end
+                end
+
                 start_x = best_x
-                -- Re-refine end_x with corrected start_x
                 end_x = refineEndX(start_x, start_y, end_y)
             end
         end

@@ -3569,9 +3569,21 @@ function Audiobook:onResume()
     if not self._paused_by_suspend then return end
     self._paused_by_suspend = false
 
+    -- Invalidate cached sink so waking from sleep re-probes for active BT sink
+    if self.tts_engine and self.tts_engine.invalidateSink then
+        self.tts_engine:invalidateSink()
+    end
+    if self.bt_manager and self.bt_manager.clearAudioDeviceCache then
+        self.bt_manager:clearAudioDeviceCache()
+    end
+
     -- Resume media playback
     if self.media_sync and self._media_was_playing then
         self._media_was_playing = nil
+        if self.media_sync.media_engine then
+            local vol = self:getSetting("media_volume_pct", 100)
+            pcall(function() self.media_sync.media_engine:setVolume(vol) end)
+        end
         pcall(function() self.media_sync:resume() end)
         logger.warn("Audiobook: Resume — resumed media playback")
         return

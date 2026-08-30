@@ -4010,6 +4010,12 @@ function TTSEngine:_tryKindleNativeTtsFallback(context)
     return nil
 end
 
+function TTSEngine:invalidateSink()
+    self._cached_player = nil
+    self._no_real_audio_output = false
+    self.player_cmd = self:findAudioPlayer()
+end
+
 --[[--
 Find available audio player.
 Sets self.audio_player_type to "kindle-native-tts", "kindle-lipc", "gst-bt",

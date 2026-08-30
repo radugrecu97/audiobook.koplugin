@@ -3493,18 +3493,32 @@ function MediaEngine:setVolume(pct)
             if f then f:write(string.format("volume %d 1\n", pct)); f:close() end
         end
     else
+        -- Persistent pipeline (MTK Kobo): restart ffmpeg feeder with new
+        -- volume filter in filter chain (no hardware mixer on this sink)
+        if self._persistent_pipeline_active and not self.is_paused then
+            local pos = (self:getPosition() or 0) - (self.position_latency_s or 0)
+            self:seek(math.max(0, pos), "absolute")
+            logger.warn("MediaEngine: setVolume persistent pipeline restart, pct=", pct)
+            return
+        end
+
         -- Linux / Kobo: Try real-time ALSA / BlueALSA hardware volume adjustment
         local set_hw = false
         pcall(function()
-            -- 1. BlueALSA mixer control
+            -- 1. BlueALSA mixer control (Kobo Libra BW)
             if os.execute(string.format("amixer -D bluealsa sset 'A2DP' %d%% >/dev/null 2>&1", pct)) == 0 then
                 set_hw = true
                 return
             end
-            -- 2. Standard ALSA Master / PCM controls
-            if os.execute(string.format("amixer set Master %d%% >/dev/null 2>&1 || amixer set PCM %d%% >/dev/null 2>&1", pct, pct)) == 0 then
-                set_hw = true
-                return
+            -- 2. Standard ALSA Master / PCM controls (skip on MTK Kobo where
+            -- ALSA only controls internal speaker, not BT output)
+            if not self._use_persistent_pipeline then
+                if os.execute(string.format(
+                    "amixer set Master %d%% >/dev/null 2>&1 || amixer set PCM %d%% >/dev/null 2>&1",
+                    pct, pct)) == 0 then
+                    set_hw = true
+                    return
+                end
             end
             -- 3. Kindle volume
             local DeviceMod = require("device")

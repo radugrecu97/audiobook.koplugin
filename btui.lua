@@ -153,15 +153,17 @@ function BtUI.buildBluetoothMenu(plugin)
         })
     end
     for _, dev in ipairs(devices) do
-        local label = dev.name ~= "" and dev.name or dev.address
-        local icon = "  "
-        if dev.connected then
-            icon = "[*] "
-        elseif dev.paired then
-            icon = "✓ "
-        end
         table.insert(menu, {
-            text = icon .. label,
+            text_func = function()
+                local label = dev.name ~= "" and dev.name or dev.address
+                local icon = "  "
+                if dev.connected then
+                    icon = "[*] "
+                elseif dev.paired then
+                    icon = "✓ "
+                end
+                return icon .. label
+            end,
             -- Tap = connect (or disconnect if already connected)
             callback = function(touchmenu_instance)
                 BtUI.btQuickConnect(plugin, dev, touchmenu_instance)

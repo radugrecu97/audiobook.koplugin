@@ -32,6 +32,7 @@ local ProgressWidget = require("ui/widget/progresswidget")
 local RenderText = require("ui/rendertext")
 local Size = require("ui/size")
 local TextWidget = require("ui/widget/textwidget")
+local time = require("ui/time")
 local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
@@ -611,6 +612,7 @@ function AudiobookPlayer:setupUI()
             local v = self.on_sync_nudge(delta_ms)
             if v then
                 self._mini_time:setText(string.format("sync %+.1f s", v / 1000))
+                self._mini_time_hold_until = UIManager:getTime() + require("ui/time").s(2)
                 UIManager:setDirty(self, function()
                     return "ui", self._minimized and self.dimen or nil
                 end)
@@ -914,6 +916,8 @@ function AudiobookPlayer:setPlaying(is_playing)
 end
 
 function AudiobookPlayer:updateTimeDisplay(current_sec, total_sec)
+    local hold_active = self._mini_time_hold_until
+        and UIManager:getTime() < self._mini_time_hold_until
     local text
     if self._time_display_mode == "chapter" and self._current_chapter_end > self._current_chapter_start then
         local chapter_pos = math.max(0, current_sec - self._current_chapter_start)
@@ -925,10 +929,15 @@ function AudiobookPlayer:updateTimeDisplay(current_sec, total_sec)
     if text ~= self.current_time_str then
         self.current_time_str = text
         self.time_widget:setText(text)
-        self._mini_time:setText(text)
+        if not hold_active then
+            self._mini_time:setText(text)
+        end
         UIManager:setDirty(self, function()
             return "ui", self.time_widget.dimen
         end)
+    end
+    if not hold_active then
+        self._mini_time_hold_until = nil
     end
 end
 
@@ -1316,6 +1325,7 @@ function AudiobookPlayer:_applyVolume(delta)
     -- Mini bar: flash the level in the time slot, like the sync nudge.
     if self._mini_time then
         self._mini_time:setText(string.format("vol %d%%", pct))
+        self._mini_time_hold_until = UIManager:getTime() + require("ui/time").s(2)
     end
     UIManager:setDirty(self, function()
         if self._minimized then return "ui", self.dimen end
