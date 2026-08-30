@@ -46,5 +46,10 @@ tools/*.pyc
 # Secrets & local model downloads
 .env
 .env.*
-piper_models/
+.build-bluealsa-compat
 
+# Audiobook generator work directories and test outputs
+.audiobookgen/
+bitrate_comparison/
+dev/_fixtures/
+report.*.json

@@ -50,18 +50,36 @@ python tools/epub_to_audiobook_fishspeech.py \
   --lang en
 ```
 
-### 3. Other Supported Languages
-* German: `--lang de`
-* French: `--lang fr`
-* Spanish: `--lang es`
-* Italian: `--lang it`
-* Hungarian: `--lang hu`
-* Japanese: `--lang ja`
-* Chinese: `--lang zh`
-
-### 4. Test on a Few Chapters First
+### 3. Voice Pacing & Pause Tuning
+Fine-tune speech rate and pauses between sentences:
 ```bash
-python tools/epub_to_audiobook_fishspeech.py -i book.epub --start-chapter 1 --end-chapter 2
+python tools/epub_to_audiobook_fishspeech.py \
+  -i book.epub \
+  --prompt-audio sample.wav \
+  --prompt-text "Transcript" \
+  --speed 0.90 \
+  --pause-duration 0.35 \
+  --pause-variance 0.075 \
+  --audio-bitrate 64k
+```
+
+### 4. Resuming Interrupted Generations
+Generation is crash-resilient by default. Intermediate chapter state and sentence audio are cached:
+```bash
+# Automatically resumes from last finished chapter
+python tools/epub_to_audiobook_fishspeech.py -i book.epub --resume
+```
+
+### 5. Quality Control (Whisper Verification)
+Enable automated verification to detect truncations or hallucinations:
+```bash
+python tools/epub_to_audiobook_fishspeech.py -i book.epub --qc fast --qc-retries 2
+```
+
+### 6. Dry Run Estimation
+Pre-flight check without calling the TTS server:
+```bash
+python tools/epub_to_audiobook_fishspeech.py -i book.epub --dry-run
 ```
 
 ---
@@ -71,4 +89,4 @@ python tools/epub_to_audiobook_fishspeech.py -i book.epub --start-chapter 1 --en
 1. Copy `book_audiobook.epub` to your Kobo storage (e.g. `/mnt/onboard/books/`).
 2. Open the book in KOReader.
 3. Long-press any word on the screen $\rightarrow$ tap **Play aligned audiobook from here**.
-4. The Fish Speech neural narration begins immediately from that word, with synchronized screen highlights and automatic page turns.
+4. The Fish Speech neural narration begins immediately from that sentence, with synchronized screen highlights and automatic page turns.
