@@ -109,6 +109,7 @@ class FishSpeechProvider(TTSProvider):
                 "repetition_penalty": float(voice.repetition_penalty),
                 "seed": int(seed),
                 "chunk_length": int(voice.chunk_length),
+                "context_tail_seconds": float(voice.context_tail_seconds),
             }
             if audio_b64:
                 payload["references"] = [

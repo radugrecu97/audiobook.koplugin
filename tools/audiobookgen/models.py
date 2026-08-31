@@ -50,7 +50,8 @@ class VoiceProfile:
     repetition_penalty: float = 1.05
     seed: int = 42
     speed: float = 1.0
-    chunk_length: int = 300
+    chunk_length: int = 700
+    context_tail_seconds: float = 5.0
     model_id: str = "fishspeech-s2-pro"
 
 

@@ -45,7 +45,8 @@ def parse_cli(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--top-p", type=float, default=float(os.environ.get("TOP_P", "0.85")), help="Top-p nucleus sampling (default: 0.85).")
     parser.add_argument("--repetition-penalty", type=float, default=float(os.environ.get("REPETITION_PENALTY", "1.05")), help="Repetition penalty (default: 1.05).")
     parser.add_argument("--seed", type=int, default=int(os.environ.get("SEED", "42")), help="Fixed random seed for consistent voice timbre (default: 42).")
-    parser.add_argument("--chunk-length", type=int, default=int(os.environ.get("CHUNK_LENGTH", "300")), help="Max chunk byte size in batch (default: 300).")
+    parser.add_argument("--chunk-length", type=int, default=int(os.environ.get("CHUNK_LENGTH", "700")), help="Max chunk byte size in batch (default: 700).")
+    parser.add_argument("--context-tail-seconds", type=float, default=float(os.environ.get("CONTEXT_TAIL_SECONDS", "5.0")), help="Seconds of previous audio to carry as context for continuity (default: 5.0, 0=disable).")
     parser.add_argument("--style-tag", "--style", "-s", dest="style_tag", default=os.environ.get("STYLE_TAG", os.environ.get("STYLE", "")), help="Style/narrator tag prepended to sentences.")
     parser.add_argument("--pacing", "-p", default=os.environ.get("PACING", "none"), choices=["none", "slow", "relaxed", "dots", "break"], help="Pacing preset.")
     parser.add_argument("--pause-duration", "-P", type=float, default=float(os.environ.get("PAUSE_DURATION", "0.45")), help="Silence duration between sentences in seconds (default: 0.45).")
@@ -115,6 +116,7 @@ def main(argv: list[str] | None = None) -> None:
         seed=args.seed,
         speed=args.speed,
         chunk_length=args.chunk_length,
+        context_tail_seconds=args.context_tail_seconds,
     )
 
     # Audio Encoder

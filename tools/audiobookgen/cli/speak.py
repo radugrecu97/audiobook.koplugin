@@ -38,7 +38,8 @@ def synthesize_utterance(
     temperature: float = 0.65,
     top_p: float = 0.85,
     repetition_penalty: float = 1.05,
-    chunk_length: int = 300,
+    chunk_length: int = 700,
+    context_tail_seconds: float = 5.0,
     server_url: str = "http://127.0.0.1:8080/v1/tts",
 ) -> None:
     ref_path = Path(ref_audio).resolve()
@@ -69,6 +70,7 @@ def synthesize_utterance(
     print(f"Style Tag:          {style if style else '(none - natural speaker cadence)'}")
     print(f"Speed Rate:         {speed:.2f}x" + (" (slower speech)" if speed < 1.0 else " (faster speech)" if speed > 1.0 else " (normal)"))
     print(f"Sentence Pause:     {pause_desc} [exact silence, unaffected by speed rate]")
+    print(f"Context Tail:       {context_tail_seconds:.1f}s")
     print(f"Seed:               {seed}")
     print(f"Synthesizing:       {normalized_text[:120]}..." if len(normalized_text) > 120 else f"Synthesizing:       {normalized_text}")
     print(f"Output File:        {out_path}")
@@ -84,6 +86,7 @@ def synthesize_utterance(
         seed=seed,
         speed=speed,
         chunk_length=chunk_length,
+        context_tail_seconds=context_tail_seconds,
     )
 
     provider = FishSpeechProvider(server_url=server_url)
@@ -153,7 +156,8 @@ def parse_cli(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--temperature", "-T", type=float, default=float(os.environ.get("TEMPERATURE", "0.65")), help="Sampling temperature / timing stability (default: 0.65).")
     parser.add_argument("--top-p", type=float, default=float(os.environ.get("TOP_P", "0.85")), help="Top-p sampling (default: 0.85).")
     parser.add_argument("--repetition-penalty", type=float, default=float(os.environ.get("REPETITION_PENALTY", "1.05")), help="Repetition penalty (default: 1.05).")
-    parser.add_argument("--chunk-length", type=int, default=int(os.environ.get("CHUNK_LENGTH", "300")), help="Max batch chunk size in bytes.")
+    parser.add_argument("--chunk-length", type=int, default=int(os.environ.get("CHUNK_LENGTH", "700")), help="Max batch chunk size in bytes (default: 700).")
+    parser.add_argument("--context-tail-seconds", type=float, default=float(os.environ.get("CONTEXT_TAIL_SECONDS", "5.0")), help="Seconds of previous audio to carry as context for continuity (default: 5.0, 0=disable).")
     parser.add_argument("--server-url", type=str, default=os.environ.get("SERVER_URL", "http://127.0.0.1:8080/v1/tts"))
     parser.add_argument("--default-text", type=str, default="Hello, this is a test.")
     parser.add_argument("--default-output", type=str, default="output.wav")
@@ -201,6 +205,7 @@ def main(argv: list[str] | None = None) -> None:
         top_p=args.top_p,
         repetition_penalty=args.repetition_penalty,
         chunk_length=args.chunk_length,
+        context_tail_seconds=args.context_tail_seconds,
         server_url=args.server_url,
     )
 
